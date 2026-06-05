@@ -124,3 +124,15 @@ export async function insertLink(fromUrlId: number, toUrlId: number): Promise<vo
     [fromUrlId, toUrlId]
   );
 }
+
+/**
+ * Resets all URLs with FETCHING status back to PENDING.
+ * Used for crash recovery on startup to release stale locks.
+ */
+export async function resetStaleLocks(): Promise<void> {
+  await query(
+    `UPDATE urls
+     SET status = 'PENDING'
+     WHERE status = 'FETCHING'`
+  );
+}

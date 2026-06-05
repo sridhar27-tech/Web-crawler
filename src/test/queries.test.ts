@@ -12,7 +12,7 @@ vi.mock("../db/client.js", () => {
 
 // Import the mocked query and pool
 import { query, pool } from "../db/client.js";
-import { claimNextURL, markDone, markFailed, insertURL, insertLink } from "../db/queries.js";
+import { claimNextURL, markDone, markFailed, insertURL, insertLink, resetStaleLocks } from "../db/queries.js";
 
 const mockedQuery = vi.mocked(query);
 const mockedPool = vi.mocked(pool);
@@ -141,6 +141,24 @@ describe("Database Queries", () => {
       expect(mockedQuery).toHaveBeenCalledWith(
         expect.stringContaining("INSERT INTO links"),
         [1, 2]
+      );
+    });
+  });
+
+  describe("resetStaleLocks", () => {
+    it("should reset FETCHING urls back to PENDING", async () => {
+      mockedQuery.mockResolvedValue({ rows: [] } as any);
+      await resetStaleLocks();
+
+      expect(mockedQuery).toHaveBeenCalledTimes(1);
+      expect(mockedQuery).toHaveBeenCalledWith(
+        expect.stringContaining("UPDATE urls")
+      );
+      expect(mockedQuery).toHaveBeenCalledWith(
+        expect.stringContaining("status = 'PENDING'")
+      );
+      expect(mockedQuery).toHaveBeenCalledWith(
+        expect.stringContaining("status = 'FETCHING'")
       );
     });
   });
