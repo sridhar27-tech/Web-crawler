@@ -13,11 +13,17 @@ export const config = {
     "https://react.dev",
     "https://developer.mozilla.org",
     "https://www.typescriptlang.org/",
+    "https://nodejs.org/en",
+    "https://nextjs.org",
+    "https://www.postgresql.org/docs/current/",
   ],
 
   ALLOWED_DOMAINS: [
     "react.dev",
     "developer.mozilla.org",
-    "typescriptlang.org",
+    "www.typescriptlang.org",
+    "nodejs.org",
+    "nextjs.org",
+    "www.postgresql.org",
   ],
 };
