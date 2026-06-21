@@ -1,9 +1,10 @@
 import { downloadPage } from "./downloader.js";
 import { extractPageData } from "./extractor.js";
 import { normalizeURL, getDomain } from "../normalizer.js";
-import { insertURL, insertLink, markDone, markFailed } from "../db/queries.js";
+import { insertURL, insertLink, markFailed } from "../db/queries.js";
 import { config } from "../config.js";
 import { isAllowedByRobots } from "../frontier/robots.js";
+import { getStrategy } from "../output/index.js";
 
 function isDomainAllowed(domain: string): boolean {
   if (!config.ALLOWED_DOMAINS || config.ALLOWED_DOMAINS.length === 0) {
@@ -16,7 +17,7 @@ function isDomainAllowed(domain: string): boolean {
  * Handles the complete crawling workflow for a single URL:
  * 1. Downloads the page HTML (handling redirects & timeouts).
  * 2. Extracts title, description, canonical, headings, text content, and outgoing links.
- * 3. Saves the content in the database.
+ * 3. Delegates persistence to the active OutputStrategy (DB or PDF).
  * 4. Filters, normalizes, and enqueues discovered links, establishing link graph relations.
  */
 export async function processPage(urlRow: { id: number; url: string; depth: number }): Promise<void> {
@@ -47,8 +48,9 @@ export async function processPage(urlRow: { id: number; url: string; depth: numb
       }
     }
 
-    // 3. Mark page as DONE and save content in db
-    await markDone(urlId, {
+    // 3. Persist content via the active output strategy (DB or PDF)
+    const strategy = getStrategy();
+    await strategy.save(urlId, finalUrl, {
       title: extracted.title,
       description: extracted.description,
       canonicalUrl: extracted.canonicalUrl,
