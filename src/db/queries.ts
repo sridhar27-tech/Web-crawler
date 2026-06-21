@@ -137,6 +137,27 @@ export async function resetStaleLocks(): Promise<void> {
   );
 }
 
+/**
+ * Deletes all PENDING URLs whose domain is not in the provided allowed list.
+ * This includes child links discovered during previous crawls, ensuring a new
+ * session scoped to different seeds starts with a clean queue.
+ */
+export async function clearPendingURLs(allowedDomains: string[]): Promise<void> {
+  if (allowedDomains.length === 0) return;
+
+  const result = await query(
+    `DELETE FROM urls
+     WHERE status = 'PENDING'
+       AND domain <> ALL($1::text[])`,
+    [allowedDomains]
+  );
+
+  const deleted = (result as any).rowCount ?? 0;
+  if (deleted > 0) {
+    console.log(`[setup] Cleared ${deleted} stale PENDING URL(s) outside allowed domains.`);
+  }
+}
+
 export interface GlobalStats {
   pending: number;
   fetching: number;

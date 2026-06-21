@@ -1,13 +1,17 @@
 import { select, input, number, confirm } from "@inquirer/prompts";
 import fs from "fs";
 import { seedDatabase } from "./seed.js";
-import { resetStaleLocks } from "./db/queries.js";
+import { resetStaleLocks, clearPendingURLs } from "./db/queries.js";
 import { startScheduler } from "./frontier/scheduler.js";
 import { pool } from "./db/client.js";
 import { config } from "./config.js";
 import { createStrategy, setStrategy, type OutputMode } from "./output/index.js";
 
 const SEEDS_FILE = "seeds.txt";
+
+// Minimum politeness delay — any value below this is raised to the threshold
+// to prevent accidental DDoS-like hammering of target servers.
+const MIN_CRAWL_DELAY_MS = 500;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -28,6 +32,17 @@ function extractDomains(urls: string[]): string[] {
     } catch {}
     return acc;
   }, []);
+}
+
+function enforceCrawlDelay(raw: number): number {
+  if (raw < MIN_CRAWL_DELAY_MS) {
+    console.warn(
+      `  ⚠  CRAWL_DELAY_MS ${raw}ms is below the safe minimum. ` +
+      `Raised to ${MIN_CRAWL_DELAY_MS}ms to avoid aggressive request rates.`
+    );
+    return MIN_CRAWL_DELAY_MS;
+  }
+  return raw;
 }
 
 // ─── CLI Wizard ───────────────────────────────────────────────────────────────
@@ -99,8 +114,8 @@ async function runWizard(): Promise<{
     validate: (v) => (v !== undefined && v >= 0 ? true : "Must be 0 or greater"),
   });
 
-  const crawlDelayMs = await number({
-    message: "CRAWL_DELAY_MS — politeness delay per domain (ms):",
+  const rawDelay = await number({
+    message: `CRAWL_DELAY_MS — politeness delay per domain (ms, min ${MIN_CRAWL_DELAY_MS}ms):`,
     default: config.CRAWL_DELAY_MS,
     validate: (v) => (v !== undefined && v >= 0 ? true : "Must be 0 or greater"),
   });
@@ -128,12 +143,14 @@ async function runWizard(): Promise<{
     process.exit(0);
   }
 
-  // Apply settings to config at runtime
-  config.MAX_DEPTH = maxDepth ?? config.MAX_DEPTH;
-  config.CRAWL_DELAY_MS = crawlDelayMs ?? config.CRAWL_DELAY_MS;
-  config.WORKER_COUNT = workerCount ?? config.WORKER_COUNT;
-  config.MAX_PAGES = maxPages ?? config.MAX_PAGES;
-  config.OUTPUT_MODE = outputMode;
+  // Resolve and validate settings
+  const crawlDelayMs = enforceCrawlDelay(rawDelay ?? config.CRAWL_DELAY_MS);
+
+  config.MAX_DEPTH     = maxDepth    ?? config.MAX_DEPTH;
+  config.CRAWL_DELAY_MS = crawlDelayMs;
+  config.WORKER_COUNT  = workerCount ?? config.WORKER_COUNT;
+  config.MAX_PAGES     = maxPages    ?? config.MAX_PAGES;
+  config.OUTPUT_MODE   = outputMode;
 
   // Resolve seed URLs
   let seedUrls: string[];
@@ -145,12 +162,16 @@ async function runWizard(): Promise<{
     seedUrls = config.SEED_URLS;
   }
 
-  config.SEED_URLS = seedUrls;
+  // Lock config to only the chosen seeds — this is what controls which domains
+  // the crawler is allowed to visit. Old DB entries for other domains won't be
+  // picked up because isDomainAllowed() filters them out in the worker.
+  config.SEED_URLS      = seedUrls;
   config.ALLOWED_DOMAINS = extractDomains(seedUrls);
 
   console.log(`\n✓ ${seedUrls.length} seed URL(s) queued`);
-  console.log(`✓ Output → ${outputMode === "pdf" ? "PDF (output/documentation.pdf)" : "PostgreSQL database"}`);
-  console.log(`✓ Depth: ${config.MAX_DEPTH} | Delay: ${config.CRAWL_DELAY_MS}ms | Workers: ${config.WORKER_COUNT} | Max pages: ${config.MAX_PAGES || "∞"}\n`);
+  console.log(`✓ Allowed domains: ${config.ALLOWED_DOMAINS.join(", ")}`);
+  console.log(`✓ Output → ${outputMode === "pdf" ? "PDF (output/documentation*.pdf)" : "PostgreSQL database"}`);
+  console.log(`✓ Depth: ${config.MAX_DEPTH} | Delay: ${crawlDelayMs}ms | Workers: ${config.WORKER_COUNT} | Max pages: ${config.MAX_PAGES || "∞"}\n`);
 
   return { seedUrls, outputMode };
 }
@@ -171,20 +192,24 @@ async function main() {
     // 1. Crash recovery
     await resetStaleLocks();
 
-    // 2. Seed database with chosen URLs
+    // 2. Clear any PENDING URLs from previous runs that belong to domains
+    //    outside the current ALLOWED_DOMAINS — prevents stale seeds bleeding in.
+    await clearPendingURLs(config.ALLOWED_DOMAINS);
+
+    // 3. Seed database with the URLs chosen in the wizard
     await seedDatabase();
 
-    // 3. Start the scheduling loop
+    // 4. Start the scheduling loop
     await startScheduler();
 
     console.log("Crawling finished.");
   } catch (error) {
     console.error("Fatal error in main crawler loop:", error);
   } finally {
-    // 4. Flush output strategy (e.g. finalise PDF)
+    // 5. Flush output strategy (e.g. finalise PDF)
     await strategy.finish();
 
-    // 5. Close DB pool
+    // 6. Close DB pool
     await pool.end();
     console.log("Database connection pool closed.");
   }
