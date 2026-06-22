@@ -13,6 +13,7 @@
 import { select, number, confirm } from "@inquirer/prompts";
 import fs from "fs";
 import path from "path";
+import { validateSeedUrls } from "./security/validate-url.js";
 
 const SEEDS_FILE = "seeds.txt";
 const ENV_FILE = ".env";
@@ -25,11 +26,22 @@ function readSeedsFile(): string[] {
     console.warn(`[setup] ${SEEDS_FILE} not found. No seed URLs will be loaded.`);
     return [];
   }
-  return fs
+  const raw = fs
     .readFileSync(SEEDS_FILE, "utf-8")
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => l.length > 0 && !l.startsWith("#"));
+
+  const { valid, invalid } = validateSeedUrls(raw);
+
+  if (invalid.length > 0) {
+    console.warn(`[setup] Skipping ${invalid.length} invalid URL(s) in ${SEEDS_FILE}:`);
+    for (const e of invalid) {
+      console.warn(`         ✗ ${e.reason}`);
+    }
+  }
+
+  return valid;
 }
 
 function extractDomains(urls: string[]): string[] {

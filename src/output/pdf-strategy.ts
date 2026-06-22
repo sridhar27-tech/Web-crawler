@@ -9,43 +9,44 @@ type PDFDocumentInstance = InstanceType<typeof PDFDocumentCtor>;
 const OUTPUT_DIR = "output";
 const BASE_NAME  = "documentation";
 
-/**
- * Returns the next available PDF path.
- * documentation.pdf → documentation2.pdf → documentation3.pdf → ...
- */
 function resolveOutputPath(): string {
   const first = path.join(OUTPUT_DIR, `${BASE_NAME}.pdf`);
   if (!fs.existsSync(first)) return first;
-
   let n = 2;
-  while (fs.existsSync(path.join(OUTPUT_DIR, `${BASE_NAME}${n}.pdf`))) {
-    n++;
-  }
+  while (fs.existsSync(path.join(OUTPUT_DIR, `${BASE_NAME}${n}.pdf`))) n++;
   return path.join(OUTPUT_DIR, `${BASE_NAME}${n}.pdf`);
 }
 
-// Max characters of body text written per page to keep file sizes manageable.
-const MAX_TEXT_PER_PAGE = 5000;
+// ─── Layout constants ─────────────────────────────────────────────────────────
 
-// Page margins (points)
-const MARGIN = 64;
+const MARGIN          = 64;
+const FOOTER_HEIGHT   = 28;   // reserved space at bottom for footer
+const MAX_TEXT_CHARS  = 5000;
 
-// Colour palette
-const COLOR_TITLE      = "#1a1a2e";
-const COLOR_URL        = "#4361ee";
-const COLOR_DESC       = "#444444";
-const COLOR_SECTION    = "#2d6a4f";
-const COLOR_BODY       = "#222222";
-const COLOR_TRUNCATED  = "#aaaaaa";
-const COLOR_RULE       = "#dddddd";
-const COLOR_COVER_BG   = "#1a1a2e";
-const COLOR_COVER_TEXT = "#ffffff";
-const COLOR_COVER_SUB  = "#a8dadc";
+// ─── Colour palette ───────────────────────────────────────────────────────────
+
+const C = {
+  title:     "#1a1a2e",
+  url:       "#4361ee",
+  desc:      "#444444",
+  section:   "#2d6a4f",
+  body:      "#222222",
+  truncated: "#aaaaaa",
+  rule:      "#dddddd",
+  coverBg:   "#1a1a2e",
+  coverFg:   "#ffffff",
+  coverSub:  "#a8dadc",
+  badge:     "#888888",
+  footer:    "#aaaaaa",
+};
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /**
- * Draws a full-width horizontal rule at the current Y position.
+ * Draws a horizontal rule at the current cursor Y and advances by `gap` points.
+ * Uses an absolute move so it never inherits stale font metrics.
  */
-function drawRule(doc: PDFDocumentInstance, color = COLOR_RULE): void {
+function rule(doc: PDFDocumentInstance, color = C.rule, gap = 10): void {
   const y = doc.y;
   doc
     .moveTo(MARGIN, y)
@@ -53,14 +54,30 @@ function drawRule(doc: PDFDocumentInstance, color = COLOR_RULE): void {
     .strokeColor(color)
     .lineWidth(0.5)
     .stroke();
-  doc.moveDown(0.6);
+  doc.y = y + gap;   // advance cursor by exact points, not line-height multiples
 }
 
 /**
- * Streams crawled page content into a single compiled PDF eBook.
- * Each crawled page becomes a titled chapter with proper layout and spacing.
- * Also persists content to the database for full dual-output support.
+ * Normalises raw scraped text:
+ *  - Collapses runs of whitespace/newlines into a single space
+ *  - Trims leading/trailing whitespace
+ * This prevents the large blank gaps that `paragraphGap` creates when the
+ * extractor's output happens to contain stray newline characters.
  */
+function normaliseText(raw: string): string {
+  return raw.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Returns the usable content height on the current page
+ * (page height minus top margin, bottom margin, and footer reservation).
+ */
+function contentBottom(doc: PDFDocumentInstance): number {
+  return doc.page.height - MARGIN - FOOTER_HEIGHT;
+}
+
+// ─── Strategy ────────────────────────────────────────────────────────────────
+
 export class PdfStrategy implements OutputStrategy {
   private doc!: PDFDocumentInstance;
   private stream!: fs.WriteStream;
@@ -68,202 +85,177 @@ export class PdfStrategy implements OutputStrategy {
   private pdfPath!: string;
 
   async init(): Promise<void> {
-    if (!fs.existsSync(OUTPUT_DIR)) {
-      fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-    }
+    if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
     this.pdfPath = resolveOutputPath();
 
     this.doc = new PDFDocumentCtor({
       autoFirstPage: false,
       bufferPages: false,
-      margins: { top: MARGIN, bottom: MARGIN, left: MARGIN, right: MARGIN },
+      // Explicit margins so pdfkit never auto-paginates into blank pages
+      // due to cursor running past the bottom margin.
+      margins: { top: MARGIN, bottom: MARGIN + FOOTER_HEIGHT, left: MARGIN, right: MARGIN },
       info: {
-        Title: "Programming Documentation",
-        Author: "Web Crawler",
+        Title:   "Programming Documentation",
+        Author:  "Web Crawler",
         Subject: "Compiled documentation from crawled pages",
       },
     });
 
     this.stream = fs.createWriteStream(this.pdfPath);
     this.doc.pipe(this.stream);
-
-    // ── Cover page ────────────────────────────────────────────────────────────
-    this.doc.addPage();
-
-    // Solid dark background
-    this.doc
-      .rect(0, 0, this.doc.page.width, this.doc.page.height)
-      .fill(COLOR_COVER_BG);
-
-    const centerY = this.doc.page.height / 2 - 80;
-
-    this.doc
-      .fontSize(36)
-      .font("Helvetica-Bold")
-      .fillColor(COLOR_COVER_TEXT)
-      .text("Programming", MARGIN, centerY, { align: "center", lineGap: 6 });
-
-    this.doc
-      .fontSize(36)
-      .font("Helvetica-Bold")
-      .fillColor(COLOR_COVER_SUB)
-      .text("Documentation", { align: "center", lineGap: 6 });
-
-    this.doc.moveDown(1.2);
-
-    this.doc
-      .fontSize(11)
-      .font("Helvetica")
-      .fillColor(COLOR_COVER_TEXT)
-      .text("Compiled by Web Crawler", { align: "center", lineGap: 4 });
-
-    this.doc
-      .fontSize(10)
-      .font("Helvetica")
-      .fillColor(COLOR_COVER_SUB)
-      .text(new Date().toUTCString(), { align: "center" });
-
+    this.renderCover();
     console.log(`[PDF] Output file: ${this.pdfPath}`);
   }
 
+  // ── Cover page ──────────────────────────────────────────────────────────────
+
+  private renderCover(): void {
+    const doc = this.doc;
+    doc.addPage();
+
+    doc.rect(0, 0, doc.page.width, doc.page.height).fill(C.coverBg);
+
+    const midY = doc.page.height / 2 - 60;
+
+    doc.fontSize(38).font("Helvetica-Bold").fillColor(C.coverFg)
+      .text("Programming", MARGIN, midY, { align: "center" });
+
+    // Advance by exact points to avoid font-size-based gaps
+    doc.y += 8;
+
+    doc.fontSize(38).font("Helvetica-Bold").fillColor(C.coverSub)
+      .text("Documentation", { align: "center" });
+
+    doc.y += 28;
+
+    doc.fontSize(11).font("Helvetica").fillColor(C.coverFg)
+      .text("Compiled by Web Crawler", { align: "center" });
+
+    doc.y += 6;
+
+    doc.fontSize(10).font("Helvetica").fillColor(C.coverSub)
+      .text(new Date().toUTCString(), { align: "center" });
+  }
+
+  // ── Chapter page ────────────────────────────────────────────────────────────
+
   async save(urlId: number, url: string, content: CrawledPageContent): Promise<void> {
-    // 1. Persist to DB as well (dual output)
     await markDone(urlId, content);
 
-    // 2. Append a chapter to the PDF
-    this.doc.addPage();
-    this.pageCount++;
-
     const doc   = this.doc;
-    const width = doc.page.width - MARGIN * 2;
-    const title = content.title ?? url;
+    this.pageCount++;
+    doc.addPage();
 
-    // ── Chapter number badge ──────────────────────────────────────────────────
-    doc
-      .fontSize(8)
-      .font("Helvetica")
-      .fillColor("#888888")
-      .text(`CHAPTER ${this.pageCount}`, MARGIN, MARGIN, { width, align: "right" });
+    const W     = doc.page.width - MARGIN * 2;   // usable text width
+    const limit = contentBottom(doc);             // y-coordinate of content boundary
 
-    doc.moveDown(0.2);
+    // ── Chapter badge (top-right, absolute position) ─────────────────────────
+    doc.fontSize(8).font("Helvetica").fillColor(C.badge)
+      .text(`CHAPTER ${this.pageCount}`, MARGIN, MARGIN, { width: W, align: "right" });
+
+    // Place cursor just below the badge — use exact points, not moveDown
+    doc.y = MARGIN + 14;
 
     // ── Title ─────────────────────────────────────────────────────────────────
-    doc
-      .fontSize(22)
-      .font("Helvetica-Bold")
-      .fillColor(COLOR_TITLE)
-      .text(title, { width, lineGap: 4 });
+    doc.fontSize(22).font("Helvetica-Bold").fillColor(C.title)
+      .text(content.title ?? url, { width: W, lineGap: 2 });
 
-    doc.moveDown(0.5);
-    drawRule(doc, "#4361ee");
+    doc.y += 10;
+    rule(doc, "#4361ee", 10);
 
     // ── Source URL ────────────────────────────────────────────────────────────
-    doc
-      .fontSize(8.5)
-      .font("Helvetica-Oblique")
-      .fillColor(COLOR_URL)
-      .text(url, { width, link: url, underline: true, lineGap: 2 });
+    doc.fontSize(8.5).font("Helvetica-Oblique").fillColor(C.url)
+      .text(url, { width: W, link: url, underline: true, lineGap: 1 });
 
-    doc.moveDown(0.8);
+    doc.y += 12;
 
     // ── Description ───────────────────────────────────────────────────────────
-    if (content.description) {
-      doc
-        .fontSize(11)
-        .font("Helvetica-Oblique")
-        .fillColor(COLOR_DESC)
-        .text(content.description, { width, lineGap: 3, align: "justify" });
+    if (content.description && doc.y < limit) {
+      doc.fontSize(11).font("Helvetica-Oblique").fillColor(C.desc)
+        .text(content.description.trim(), { width: W, lineGap: 2, align: "left" });
 
-      doc.moveDown(1);
+      doc.y += 12;
     }
 
     // ── Headings summary ──────────────────────────────────────────────────────
-    const { h1, h2, h3 } = content.headings;
-    const allHeadings = [...h1, ...h2, ...h3].slice(0, 12);
+    const allHeadings = [
+      ...content.headings.h1,
+      ...content.headings.h2,
+      ...content.headings.h3,
+    ].slice(0, 12);
 
-    if (allHeadings.length > 0) {
-      doc
-        .fontSize(9)
-        .font("Helvetica-Bold")
-        .fillColor(COLOR_SECTION)
-        .text("CONTENTS OVERVIEW", { width, characterSpacing: 1 });
+    if (allHeadings.length > 0 && doc.y < limit) {
+      doc.fontSize(9).font("Helvetica-Bold").fillColor(C.section)
+        .text("CONTENTS OVERVIEW", { width: W, characterSpacing: 1 });
 
-      doc.moveDown(0.4);
+      doc.y += 6;
 
       for (const h of allHeadings) {
-        // Bullet dot
+        if (doc.y >= limit) break;
+
         const bulletX = MARGIN;
         const textX   = MARGIN + 14;
         const y       = doc.y;
 
-        doc
-          .circle(bulletX + 3, y + 5, 2)
-          .fill(COLOR_SECTION);
+        // Bullet dot — drawn absolutely, no cursor movement
+        doc.circle(bulletX + 3, y + 5, 2).fill(C.section);
 
-        doc
-          .fontSize(10)
-          .font("Helvetica")
-          .fillColor(COLOR_BODY)
-          .text(h, textX, y, { width: width - 14, lineGap: 3 });
+        doc.fontSize(10).font("Helvetica").fillColor(C.body)
+          .text(h, textX, y, { width: W - 14, lineGap: 2 });
 
-        doc.moveDown(0.15);
+        // Advance by 4pt padding between bullet items
+        doc.y += 4;
       }
 
-      doc.moveDown(0.8);
-      drawRule(doc);
+      doc.y += 8;
+
+      if (doc.y < limit) rule(doc, C.rule, 10);
     }
 
     // ── Body text ─────────────────────────────────────────────────────────────
-    if (content.textContent) {
-      doc
-        .fontSize(9)
-        .font("Helvetica-Bold")
-        .fillColor(COLOR_SECTION)
-        .text("PAGE CONTENT", { width, characterSpacing: 1 });
+    if (content.textContent && doc.y < limit) {
+      doc.fontSize(9).font("Helvetica-Bold").fillColor(C.section)
+        .text("PAGE CONTENT", { width: W, characterSpacing: 1 });
 
-      doc.moveDown(0.5);
+      doc.y += 8;
 
-      const body      = content.textContent.slice(0, MAX_TEXT_PER_PAGE);
-      const truncated = content.textContent.length > MAX_TEXT_PER_PAGE;
+      // Normalise: collapse all whitespace so no stray newlines cause blank gaps
+      const raw       = normaliseText(content.textContent);
+      const body      = raw.slice(0, MAX_TEXT_CHARS);
+      const truncated = raw.length > MAX_TEXT_CHARS;
 
-      doc
-        .fontSize(10.5)
-        .font("Helvetica")
-        .fillColor(COLOR_BODY)
+      doc.fontSize(10.5).font("Helvetica").fillColor(C.body)
         .text(body, {
-          width,
-          lineGap: 4,       // line spacing between wrapped lines
-          paragraphGap: 8,  // extra space between paragraphs
-          align: "justify",
+          width: W,
+          lineGap: 3,
+          // paragraphGap intentionally omitted — text is already whitespace-normalised
+          align: "left",
         });
 
-      if (truncated) {
-        doc.moveDown(0.6);
-        doc
-          .fontSize(8.5)
-          .font("Helvetica-Oblique")
-          .fillColor(COLOR_TRUNCATED)
-          .text("[ content truncated for brevity ]", { width, align: "center" });
+      if (truncated && doc.y < limit) {
+        doc.y += 8;
+        doc.fontSize(8.5).font("Helvetica-Oblique").fillColor(C.truncated)
+          .text("[ content truncated for brevity ]", { width: W, align: "center" });
       }
     }
 
-    // ── Footer rule ───────────────────────────────────────────────────────────
-    const footerY = doc.page.height - MARGIN + 10;
+    // ── Footer ────────────────────────────────────────────────────────────────
+    // Drawn at a fixed absolute Y so it never shifts regardless of content length
+    const footerY = doc.page.height - MARGIN - FOOTER_HEIGHT + 8;
+
     doc
       .moveTo(MARGIN, footerY)
       .lineTo(doc.page.width - MARGIN, footerY)
-      .strokeColor(COLOR_RULE)
+      .strokeColor(C.rule)
       .lineWidth(0.4)
       .stroke();
 
-    doc
-      .fontSize(8)
-      .font("Helvetica")
-      .fillColor("#aaaaaa")
-      .text(`Page ${this.pageCount + 1}`, MARGIN, footerY + 4, {
-        width,
+    doc.fontSize(8).font("Helvetica").fillColor(C.footer)
+      .text(`Page ${this.pageCount + 1}`, MARGIN, footerY + 5, {
+        width: W,
         align: "center",
+        lineBreak: false,   // prevent pdfkit adding a page if near the bottom
       });
   }
 
