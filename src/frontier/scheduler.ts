@@ -1,5 +1,5 @@
 import { config } from "../config.js";
-import { claimNextURL, getGlobalStats } from "../db/queries.js";
+import { claimNextURL } from "../db/queries.js";
 import { getPendingDomains } from "./frontier.js";
 import { processPage } from "../worker/worker.js";
 import { startProgressLogger, stopProgressLogger } from "./logger.js";
@@ -10,6 +10,9 @@ let activeWorkers = 0;
 let lastDomainIndex = 0;
 let isRunning = false;
 
+// Pages dispatched in this session (in-memory counter, not cumulative DB total)
+let sessionPageCount = 0;
+
 export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
@@ -19,20 +22,20 @@ export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve
 export async function startScheduler(): Promise<void> {
   if (isRunning) return;
   isRunning = true;
+  sessionPageCount = 0;
 
   // Start the periodic progress logger
   await startProgressLogger();
 
   while (isRunning) {
-    // Enforce MAX_PAGES limit
-    try {
-      const stats = await getGlobalStats();
-      if (stats.done + stats.failed >= config.MAX_PAGES) {
-        console.log(`Reached MAX_PAGES limit (${config.MAX_PAGES}). Stopping crawler.`);
-        break;
+    // Enforce MAX_PAGES limit against this session's dispatched count
+    if (config.MAX_PAGES > 0 && sessionPageCount >= config.MAX_PAGES) {
+      // Wait for any in-flight workers to finish before stopping
+      while (activeWorkers > 0) {
+        await sleep(100);
       }
-    } catch (err) {
-      console.error("Error checking MAX_PAGES limit:", err);
+      console.log(`\n✓ Crawl complete — ${sessionPageCount} page(s) processed.\n`);
+      break;
     }
 
     // 1. Enforce worker concurrency limit
@@ -77,6 +80,7 @@ export async function startScheduler(): Promise<void> {
 
         // Dispatch worker
         activeWorkers++;
+        sessionPageCount++;
         processPage(urlRow)
           .catch((err) => {
             console.error(`Error processing ${urlRow.url}:`, err);

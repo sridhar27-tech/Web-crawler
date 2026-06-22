@@ -65,6 +65,10 @@ dist/
 build/
 out/
 
+# Crawler output files
+output/
+
+
 # IDEs and editors
 .idea/
 .project

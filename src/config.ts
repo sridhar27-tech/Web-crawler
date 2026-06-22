@@ -9,6 +9,9 @@ export const config = {
   MAX_REDIRECTS: parseInt(process.env.MAX_REDIRECTS || "5", 10),
   MAX_PAGES: parseInt(process.env.MAX_PAGES || "1000", 10),
 
+  /** Output destination: "database" | "pdf" */
+  OUTPUT_MODE: (process.env.OUTPUT_MODE || "database") as "database" | "pdf",
+
   SEED_URLS: [
     "https://react.dev",
     "https://developer.mozilla.org",
