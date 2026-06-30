@@ -1,8 +1,11 @@
 {
-  "name": "web-crawler",
+  "name": "messi-crawler",
   "version": "1.0.0",
   "description": "A web crawler built with Node.js and TypeScript for collecting programming-related documentation and web content.",
   "main": "dist/index.js",
+  "bin": {
+    "messi-crawler": "./dist/index.js"
+  },
   "type": "module",
   "scripts": {
     "build": "tsc",
@@ -15,15 +18,15 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lightning4747/Web-crawler.git"
+    "url": "git+https://github.com/lightning4747/Web-crawler-cli.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/lightning4747/Web-crawler/issues"
+    "url": "https://github.com/lightning4747/Web-crawler-cli/issues"
   },
-  "homepage": "https://github.com/lightning4747/Web-crawler#readme",
+  "homepage": "https://github.com/lightning4747/Web-crawler-cli#readme",
   "dependencies": {
     "cheerio": "^1.2.0",
     "dotenv": "^17.4.2",

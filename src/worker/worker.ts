@@ -37,7 +37,7 @@ export async function processPage(urlRow: { id: number; url: string; depth: numb
     const downloadResult = await downloadPage(pageUrl);
 
     // 2. Extract content & outgoing links
-    const extracted = extractPageData(downloadResult.html);
+    const extracted = extractPageData(downloadResult.html, downloadResult.url);
 
     // Resolve final URL using canonical link if present
     let finalUrl = downloadResult.url;
@@ -56,6 +56,8 @@ export async function processPage(urlRow: { id: number; url: string; depth: numb
       canonicalUrl: extracted.canonicalUrl,
       headings: extracted.headings,
       textContent: extracted.textContent,
+      blocks: extracted.blocks,
+      images: extracted.images,
     });
 
     // 4. Process outgoing links

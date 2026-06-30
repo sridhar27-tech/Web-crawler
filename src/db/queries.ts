@@ -1,4 +1,5 @@
 import { query, pool } from "./client.js";
+import type { ContentBlock, ExtractedImage } from "../worker/extractor.js";
 
 export interface URLRow {
   id: number;
@@ -14,6 +15,8 @@ export interface CrawledPageContent {
   canonicalUrl: string | null;
   headings: { h1: string[]; h2: string[]; h3: string[] };
   textContent: string | null;
+  blocks?: ContentBlock[];
+  images?: ExtractedImage[];
 }
 
 /**

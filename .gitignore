@@ -66,7 +66,7 @@ build/
 out/
 
 # Crawler output files
-output/
+/output/
 
 
 # IDEs and editors
