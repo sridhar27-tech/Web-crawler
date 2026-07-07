@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { input, select } from "@inquirer/prompts";
 import * as readline from "node:readline/promises";
 import { stdin as input$, stdout } from "node:process";
@@ -220,6 +221,7 @@ export function printSummary(s: CrawlSettings, seedsFromFile: string[]): void {
     ["delay",    `${s.crawlDelayMs}ms${s.crawlDelayMs < MIN_CRAWL_DELAY_MS ? " ! below safe minimum" : ""}`],
     ["workers",  String(s.workerCount)],
     ["maxpages", s.maxPages === 0 ? "unlimited" : String(s.maxPages)],
+    ["start" , "Start the crawl"]
   ];
 
   blank();

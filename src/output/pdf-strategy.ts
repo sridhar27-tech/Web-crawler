@@ -3,6 +3,7 @@ import path from "path";
 import PDFDocumentCtor from "pdfkit";
 import type { OutputStrategy } from "./strategy.js";
 import { markDone, type CrawledPageContent } from "../db/queries.js";
+import { downloadImage } from "../worker/downloader.js";
 
 type PDFDocumentInstance = InstanceType<typeof PDFDocumentCtor>;
 
@@ -91,12 +92,12 @@ export class PdfStrategy implements OutputStrategy {
 
     this.doc = new PDFDocumentCtor({
       autoFirstPage: false,
-      bufferPages: false,
+      bufferPages: true,
       // Explicit margins so pdfkit never auto-paginates into blank pages
       // due to cursor running past the bottom margin.
       margins: { top: MARGIN, bottom: MARGIN + FOOTER_HEIGHT, left: MARGIN, right: MARGIN },
       info: {
-        Title:   "Programming Documentation",
+        Title:   "Checkout the repo https://github.com/lightning4747/Web-crawler-cli",
         Author:  "Web Crawler",
         Subject: "Compiled documentation from crawled pages",
       },
@@ -119,20 +120,20 @@ export class PdfStrategy implements OutputStrategy {
     const midY = doc.page.height / 2 - 60;
 
     doc.fontSize(38).font("Helvetica-Bold").fillColor(C.coverFg)
-      .text("Programming", MARGIN, midY, { align: "center" });
+      .text("Web Crawler", MARGIN, midY, { align: "center" });
 
     // Advance by exact points to avoid font-size-based gaps
     doc.y += 8;
 
-    doc.fontSize(38).font("Helvetica-Bold").fillColor(C.coverSub)
-      .text("Documentation", { align: "center" });
+    doc.fontSize(32).font("Helvetica-Bold").fillColor(C.coverSub)
+      .text("Documentation Book", { align: "center" });
 
     doc.y += 28;
 
     doc.fontSize(11).font("Helvetica").fillColor(C.coverFg)
-      .text("Compiled by Web Crawler", { align: "center" });
+      .text("https://github.com/lightning4747/Web-crawler-cli", { align: "center", link: "https://github.com/lightning4747/Web-crawler-cli" });
 
-    doc.y += 6;
+    doc.y += 8;
 
     doc.fontSize(10).font("Helvetica").fillColor(C.coverSub)
       .text(new Date().toUTCString(), { align: "center" });
@@ -213,14 +214,113 @@ export class PdfStrategy implements OutputStrategy {
       if (doc.y < limit) rule(doc, C.rule, 10);
     }
 
-    // ── Body text ─────────────────────────────────────────────────────────────
-    if (content.textContent && doc.y < limit) {
+    // ── Page Content ──────────────────────────────────────────────────────────
+    if (content.blocks && content.blocks.length > 0) {
       doc.fontSize(9).font("Helvetica-Bold").fillColor(C.section)
         .text("PAGE CONTENT", { width: W, characterSpacing: 1 });
 
       doc.y += 8;
 
-      // Normalise: collapse all whitespace so no stray newlines cause blank gaps
+      for (const block of content.blocks) {
+        if (doc.y >= limit) {
+          doc.addPage();
+        }
+
+        if (block.type === "heading" && block.text) {
+          const headingSize = block.level === 1 ? 16 : block.level === 2 ? 14 : 12;
+          const headingHeight = doc.heightOfString(block.text, { width: W });
+          
+          if (doc.y + headingHeight + 40 > limit) {
+            doc.addPage();
+          }
+
+          doc.fontSize(headingSize).font("Helvetica-Bold").fillColor(C.title)
+            .text(block.text, { width: W, lineGap: 2 });
+          doc.y += 6;
+        } else if (block.type === "paragraph" && block.text) {
+          const text = block.text.trim();
+          if (!text) continue;
+
+          const textHeight = doc.heightOfString(text, { width: W });
+          if (doc.y + 20 > limit) {
+            doc.addPage();
+          }
+
+          doc.fontSize(10).font("Helvetica").fillColor(C.body)
+            .text(text, { width: W, lineGap: 3 });
+          doc.y += 8;
+        } else if (block.type === "list" && block.items && block.items.length > 0) {
+          if (doc.y + 20 > limit) {
+            doc.addPage();
+          }
+
+          for (const item of block.items) {
+            const itemText = item.trim();
+            if (!itemText) continue;
+
+            const bulletX = MARGIN + 10;
+            const textX = MARGIN + 22;
+            const itemHeight = doc.heightOfString(itemText, { width: W - 22 });
+
+            if (doc.y + itemHeight > limit) {
+              doc.addPage();
+            }
+
+            const y = doc.y;
+            doc.circle(bulletX + 3, y + 5, 2).fill(C.body);
+
+            doc.fontSize(9.5).font("Helvetica").fillColor(C.body)
+              .text(itemText, textX, y, { width: W - 22, lineGap: 2 });
+            doc.y += 4;
+          }
+          doc.y += 4;
+        } else if (block.type === "image" && block.src) {
+          try {
+            const imageBuffer = await downloadImage(block.src);
+            const maxImageHeight = 200;
+
+            if (doc.y + maxImageHeight + 20 > limit) {
+              doc.addPage();
+            }
+
+            doc.image(imageBuffer, {
+              fit: [W, maxImageHeight],
+              align: "center",
+            });
+            doc.y += maxImageHeight + 10;
+
+            if (block.alt) {
+              doc.fontSize(8.5).font("Helvetica-Oblique").fillColor(C.desc)
+                .text(block.alt, { width: W, align: "center" });
+              doc.y += 8;
+            }
+          } catch (err) {
+            const fallbackText = `[Image: ${block.alt || "No description available"} (${block.src})]`;
+            const boxHeight = 40;
+
+            if (doc.y + boxHeight > limit) {
+              doc.addPage();
+            }
+
+            const currentY = doc.y;
+            doc.rect(MARGIN, currentY, W, boxHeight)
+              .strokeColor(C.rule)
+              .lineWidth(0.5)
+              .stroke();
+
+            doc.fontSize(9).font("Helvetica-Oblique").fillColor(C.truncated)
+              .text(fallbackText, MARGIN + 10, currentY + 14, { width: W - 20, align: "center" });
+
+            doc.y = currentY + boxHeight + 10;
+          }
+        }
+      }
+    } else if (content.textContent && doc.y < limit) {
+      doc.fontSize(9).font("Helvetica-Bold").fillColor(C.section)
+        .text("PAGE CONTENT", { width: W, characterSpacing: 1 });
+
+      doc.y += 8;
+
       const raw       = normaliseText(content.textContent);
       const body      = raw.slice(0, MAX_TEXT_CHARS);
       const truncated = raw.length > MAX_TEXT_CHARS;
@@ -229,7 +329,6 @@ export class PdfStrategy implements OutputStrategy {
         .text(body, {
           width: W,
           lineGap: 3,
-          // paragraphGap intentionally omitted — text is already whitespace-normalised
           align: "left",
         });
 
@@ -239,27 +338,46 @@ export class PdfStrategy implements OutputStrategy {
           .text("[ content truncated for brevity ]", { width: W, align: "center" });
       }
     }
-
-    // ── Footer ────────────────────────────────────────────────────────────────
-    // Drawn at a fixed absolute Y so it never shifts regardless of content length
-    const footerY = doc.page.height - MARGIN - FOOTER_HEIGHT + 8;
-
-    doc
-      .moveTo(MARGIN, footerY)
-      .lineTo(doc.page.width - MARGIN, footerY)
-      .strokeColor(C.rule)
-      .lineWidth(0.4)
-      .stroke();
-
-    doc.fontSize(8).font("Helvetica").fillColor(C.footer)
-      .text(`Page ${this.pageCount + 1}`, MARGIN, footerY + 5, {
-        width: W,
-        align: "center",
-        lineBreak: false,   // prevent pdfkit adding a page if near the bottom
-      });
   }
 
   async finish(): Promise<void> {
+    const doc = this.doc;
+    const range = doc.bufferedPageRange();
+    const totalPages = range.count;
+
+    for (let i = 1; i < totalPages; i++) {
+      doc.switchToPage(i);
+
+      const W = doc.page.width - MARGIN * 2;
+      const footerY = doc.page.height - MARGIN - FOOTER_HEIGHT + 8;
+
+      // Draw running header
+      doc.fontSize(8).font("Helvetica").fillColor(C.badge)
+        .text("https://github.com/lightning4747/Web-crawler-cli", MARGIN, MARGIN - 24, { width: W, align: "left", link: "https://github.com/lightning4747/Web-crawler-cli" });
+
+      doc
+        .moveTo(MARGIN, MARGIN - 14)
+        .lineTo(doc.page.width - MARGIN, MARGIN - 14)
+        .strokeColor(C.rule)
+        .lineWidth(0.4)
+        .stroke();
+
+      // Draw running footer
+      doc
+        .moveTo(MARGIN, footerY)
+        .lineTo(doc.page.width - MARGIN, footerY)
+        .strokeColor(C.rule)
+        .lineWidth(0.4)
+        .stroke();
+
+      doc.fontSize(8).font("Helvetica").fillColor(C.footer)
+        .text(`Page ${i} of ${totalPages - 1}`, MARGIN, footerY + 5, {
+          width: W,
+          align: "center",
+          lineBreak: false,
+        });
+    }
+
     await new Promise<void>((resolve, reject) => {
       this.stream.on("finish", resolve);
       this.stream.on("error", reject);

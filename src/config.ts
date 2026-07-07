@@ -13,20 +13,10 @@ export const config = {
   OUTPUT_MODE: (process.env.OUTPUT_MODE || "database") as "database" | "pdf",
 
   SEED_URLS: [
-    "https://react.dev",
-    "https://developer.mozilla.org",
-    "https://www.typescriptlang.org/",
-    "https://nodejs.org/en",
-    "https://nextjs.org",
-    "https://www.postgresql.org/docs/current/",
+    "https://www.akc.org/dog-breeds/",
   ],
 
   ALLOWED_DOMAINS: [
-    "react.dev",
-    "developer.mozilla.org",
-    "www.typescriptlang.org",
-    "nodejs.org",
-    "nextjs.org",
-    "www.postgresql.org",
+    "www.akc.org",
   ],
 };

@@ -83,3 +83,67 @@ export async function downloadPage(initialUrl: string): Promise<DownloaderResult
     return { url: currentUrl, html, statusCode };
   }
 }
+
+/**
+ * Downloads image assets securely.
+ * Enforces the same SSRF/blocklist checks, redirection limits, and timeouts as pages.
+ */
+export async function downloadImage(initialUrl: string): Promise<Buffer> {
+  let currentUrl = initialUrl;
+  let redirectCount = 0;
+
+  // SSRF check on initial URL
+  await assertNotBlocked(currentUrl);
+
+  while (true) {
+    const res = await request(currentUrl, {
+      method: "GET",
+      headersTimeout: config.REQUEST_TIMEOUT_MS,
+      bodyTimeout: config.REQUEST_TIMEOUT_MS,
+    });
+
+    const statusCode = res.statusCode;
+
+    // Handle redirects (301, 302, 303, 307, 308)
+    if (statusCode >= 300 && statusCode < 400 && res.headers.location) {
+      if (redirectCount >= config.MAX_REDIRECTS) {
+        await res.body.text();
+        throw new Error("Too many redirects fetching image");
+      }
+
+      const location = Array.isArray(res.headers.location)
+        ? res.headers.location[0]
+        : res.headers.location;
+
+      const nextUrl = new URL(location, currentUrl).href;
+
+      // SSRF check on target before redirecting
+      await assertNotBlocked(nextUrl);
+
+      currentUrl = nextUrl;
+      redirectCount++;
+      await res.body.text();
+      continue;
+    }
+
+    if (statusCode !== 200) {
+      await res.body.text();
+      throw new Error(`HTTP status ${statusCode} fetching image`);
+    }
+
+    // Validate that it's an image
+    const contentTypeHeader = res.headers["content-type"];
+    const contentType = Array.isArray(contentTypeHeader)
+      ? contentTypeHeader[0]
+      : contentTypeHeader;
+
+    if (contentType && !contentType.startsWith("image/")) {
+      await res.body.text();
+      throw new Error(`Non-image content type: ${contentType}`);
+    }
+
+    const arrayBuffer = await res.body.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  }
+}
+

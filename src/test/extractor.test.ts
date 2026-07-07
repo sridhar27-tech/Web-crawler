@@ -58,4 +58,82 @@ describe("HTML Extractor", () => {
     expect(result.textContent).toBe("Just some text");
     expect(result.links).toEqual([]);
   });
+
+  it("should select main content via tags (article/main/role=main) and remove chrome", () => {
+    const html = `
+      <html>
+        <body>
+          <header><nav>Header navigation links</nav></header>
+          <div role="main">
+            <article>
+              <h1>Article Title</h1>
+              <p>This is the actual article content.</p>
+              <footer>Article footer inside main</footer>
+            </article>
+          </div>
+          <footer>Site footer chrome</footer>
+        </body>
+      </html>
+    `;
+    const result = extractPageData(html);
+    // Note: article footer and header nav should be removed
+    expect(result.textContent).toBe("Article Title This is the actual article content.");
+    expect(result.textContent).not.toContain("Header navigation links");
+    expect(result.textContent).not.toContain("Site footer chrome");
+  });
+
+  it("should select main content via text density score when no tag is present", () => {
+    const html = `
+      <html>
+        <body>
+          <div class="sidebar">
+            <p>Nav 1</p>
+            <p>Nav 2</p>
+          </div>
+          <div class="content">
+            <p>This is a much longer paragraph with a lot of text to ensure it has a higher text density compared to the sidebar. It contains many words and represents the main article body.</p>
+            <p>Another paragraph to increase text density even more.</p>
+          </div>
+        </body>
+      </html>
+    `;
+    const result = extractPageData(html);
+    expect(result.textContent).toContain("This is a much longer paragraph");
+    expect(result.textContent).not.toContain("Nav 1");
+  });
+
+  it("should extract structured blocks and resolve image URLs", () => {
+    const html = `
+      <html>
+        <body>
+          <article>
+            <h1>Title</h1>
+            <p>Intro paragraph.</p>
+            <ul>
+              <li>Item A</li>
+              <li>Item B</li>
+            </ul>
+            <img src="/assets/photo.jpg" alt="A nice photo">
+          </article>
+        </body>
+      </html>
+    `;
+    const result = extractPageData(html, "https://example.com/blog/post-1");
+    
+    expect(result.blocks).toBeDefined();
+    expect(result.blocks!.length).toBe(4);
+    expect(result.blocks![0]).toEqual({ type: "heading", level: 1, text: "Title" });
+    expect(result.blocks![1]).toEqual({ type: "paragraph", text: "Intro paragraph." });
+    expect(result.blocks![2]).toEqual({ type: "list", items: ["Item A", "Item B"] });
+    expect(result.blocks![3]).toEqual({
+      type: "image",
+      src: "https://example.com/assets/photo.jpg",
+      alt: "A nice photo",
+    });
+
+    expect(result.images).toEqual([
+      { src: "https://example.com/assets/photo.jpg", alt: "A nice photo" },
+    ]);
+  });
 });
+
